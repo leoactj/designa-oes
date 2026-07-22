@@ -167,6 +167,18 @@
 <!-- ================= IRMÃOS ================= -->
 <div class="panel active" id="panel-irmaos">
   <div class="config-card">
+    <h2>Planilha do Google Sheets</h2>
+    <p class="sub">Cole o link do App da Web (o mesmo do Apps Script). O cadastro de irmãos fica salvo lá automaticamente — abra o site em qualquer computador ou celular e ele já vem carregado.</p>
+    <div class="row">
+      <div class="field" style="flex:1;min-width:320px;">
+        <label>Link do Google Sheets</label>
+        <input type="text" id="sheets-url" value="https://script.google.com/macros/s/AKfycbyAenrjfYGIwbotHCAAQefo3U2OoiyCzuiMcxXc9bCAo1iLvviKOilvEmI9rZDkknOe/exec" placeholder="https://script.google.com/macros/s/..." onchange="onSheetsUrlChange()">
+      </div>
+      <button class="btn-ghost" onclick="syncIrmaosFromSheets(true)">🔄 Recarregar da planilha</button>
+    </div>
+    <p class="sub" id="sync-status" style="margin:8px 0 0;">Cole o link acima para ativar a sincronização automática.</p>
+  </div>
+  <div class="config-card">
     <h2>Cadastro de irmãos</h2>
     <p class="sub">Adicione os irmãos e marque para quais funções cada um está apto (usado no sorteio).</p>
     <div class="row" style="margin-bottom:16px;">
@@ -209,12 +221,8 @@
   </div>
   <div class="config-card">
     <h2>Importar Tema / Orador / Congregação</h2>
-    <p class="sub">Cole o link do App da Web do Google Apps Script (ele já vem preenchido se for o mesmo de sempre) e clique em importar sempre que seu colega atualizar a planilha.</p>
+    <p class="sub">Usa o mesmo link da planilha configurado na aba "Irmãos". Clique em importar sempre que seu colega atualizar a planilha.</p>
     <div class="row">
-      <div class="field" style="flex:1;min-width:320px;">
-        <label>Link do Google Sheets</label>
-        <input type="text" id="sheets-url" value="https://script.google.com/macros/s/AKfycbx99Jx4FcPdNb8zvzfw9nVv01Uq8FHxE0JtD9OmjTDcR0Ct-RhBElCTjLI0NE7Vod8/exec">
-      </div>
       <button class="btn-primary" onclick="importarDoSheets()">🔄 Importar do Google Sheets</button>
     </div>
   </div>
@@ -360,11 +368,13 @@ function addBrother(){
   state.brothers.push(b);
   input.value='';
   renderBrothers();
+  agendarSyncIrmaos();
 }
 function removeBrother(id){
   if(!confirm('Remover este irmão do cadastro?')) return;
   state.brothers = state.brothers.filter(b=>b.id!==id);
   renderBrothers(); renderTable('fimdesemana'); renderTable('meiodesemana');
+  agendarSyncIrmaos();
 }
 function renderBrothers(){
   const el = document.getElementById('brothers-list');
@@ -380,6 +390,7 @@ function renderBrothers(){
 function toggleRole(id, key, val){
   const b = state.brothers.find(x=>x.id===id); if(!b) return;
   b.papeis[key] = val;
+  agendarSyncIrmaos();
 }
 
 /* ===================== CONFIG ===================== */
@@ -454,16 +465,30 @@ function limparTudo(){
   renderTable('meiodesemana');
 }
 
-/* ===================== IMPORTAR DO GOOGLE SHEETS ===================== */
+/* ===================== GOOGLE SHEETS: LINK COMPARTILHADO ===================== */
+function getSheetsUrl(){
+  return (document.getElementById('sheets-url')?.value || '').trim();
+}
+function onSheetsUrlChange(){
+  const url = getSheetsUrl();
+  localStorage.setItem('designacoes_sheets_url', url);
+  if(url) syncIrmaosFromSheets(true);
+}
+function setSyncStatus(msg){
+  const el = document.getElementById('sync-status');
+  if(el) el.textContent = msg;
+}
+
+/* ===================== IMPORTAR TEMA/ORADOR/CONGREGAÇÃO ===================== */
 async function importarDoSheets(){
-  const url = document.getElementById('sheets-url').value.trim();
-  if(!url){ alert('Cole o link do Google Sheets primeiro.'); return; }
+  const url = getSheetsUrl();
+  if(!url){ alert('Cole o link do Google Sheets na aba "Irmãos" primeiro.'); return; }
   if(!state.rows.fimdesemana || state.rows.fimdesemana.length===0){
     alert('Gere as datas do Fim de Semana primeiro (lá em cima), depois importe.');
     return;
   }
   try{
-    const resp = await fetch(url);
+    const resp = await fetch(url+'?action=temas');
     if(!resp.ok) throw new Error('HTTP '+resp.status);
     const dados = await resp.json();
     let atualizados = 0;
@@ -482,6 +507,65 @@ async function importarDoSheets(){
     }
   }catch(err){
     alert('Não foi possível importar. Confira se o link está certo e se o App da Web está com acesso "Qualquer pessoa". Detalhe técnico: '+err.message);
+  }
+}
+
+/* ===================== SINCRONIZAR CADASTRO DE IRMÃOS COM O SHEETS ===================== */
+let syncIrmaosTimer = null;
+function agendarSyncIrmaos(){
+  const url = getSheetsUrl();
+  if(!url) return; // sem link configurado, não sincroniza (segue só local)
+  setSyncStatus('⏳ Salvando na planilha...');
+  clearTimeout(syncIrmaosTimer);
+  syncIrmaosTimer = setTimeout(()=> syncIrmaosToSheets(), 900);
+}
+async function syncIrmaosToSheets(){
+  const url = getSheetsUrl();
+  if(!url) return;
+  try{
+    const payload = {
+      action: 'salvarIrmaos',
+      irmaos: state.brothers.map(b=>({
+        nome: b.nome,
+        qualificacoes: sharedQualifications.map(q=> b.papeis[q.key] ? q.key : null).filter(Boolean)
+      }))
+    };
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita pre-flight de CORS no Apps Script
+      body: JSON.stringify(payload)
+    });
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const agora = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+    setSyncStatus(`☁️ Salvo na planilha às ${agora}.`);
+  }catch(err){
+    setSyncStatus('⚠️ Não foi possível salvar na planilha agora. Suas alterações continuam aqui no navegador.');
+  }
+}
+async function syncIrmaosFromSheets(mostrarAviso){
+  const url = getSheetsUrl();
+  if(!url) return;
+  setSyncStatus('⏳ Carregando cadastro da planilha...');
+  try{
+    const resp = await fetch(url+'?action=irmaos');
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const dados = await resp.json();
+    if(Array.isArray(dados) && dados.length){
+      state.brothers = dados.map(item=>{
+        const b = { id: nextId++, nome: item.nome, papeis:{} };
+        sharedQualifications.forEach(q=> b.papeis[q.key] = (item.qualificacoes||[]).includes(q.key));
+        return b;
+      });
+      renderBrothers();
+      renderTable('fimdesemana');
+      renderTable('meiodesemana');
+    }
+    const agora = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+    setSyncStatus(`☁️ Sincronizado com a planilha às ${agora}. Alterações aqui são salvas automaticamente.`);
+    if(mostrarAviso) alert('Cadastro atualizado a partir da planilha.');
+  }catch(err){
+    setSyncStatus('⚠️ Não foi possível carregar da planilha. Confira o link e se o acesso está "Qualquer pessoa".');
+    if(mostrarAviso) alert('Não foi possível carregar da planilha. Detalhe técnico: '+err.message);
   }
 }
 
@@ -777,6 +861,13 @@ renderRoleConfig();
 syncPeriodDisplay();
 renderTable('fimdesemana');
 renderTable('meiodesemana');
+(function initSheetsSync(){
+  const input = document.getElementById('sheets-url');
+  if(!input) return;
+  const savedUrl = localStorage.getItem('designacoes_sheets_url');
+  if(savedUrl){ input.value = savedUrl; }
+  if(input.value.trim()){ syncIrmaosFromSheets(false); }
+})();
 </script>
 </body>
 </html>
