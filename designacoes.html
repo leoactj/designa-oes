@@ -642,6 +642,11 @@ function sortear(meeting){
   renderTable(meeting);
 }
 function sortearTudo(){
+  // limpa as designações antigas das duas reuniões antes de sortear de novo —
+  // sem isso, um sorteio anterior "contaminava" o cálculo de quem já está ocupado na outra reunião
+  ['fimdesemana','meiodesemana'].forEach(m=>{
+    (state.rows[m]||[]).forEach(row=> row.assign = {});
+  });
   sortear('fimdesemana');
   sortear('meiodesemana');
 }
