@@ -162,7 +162,7 @@
     <button class="btn-ghost" onclick="imprimirJuntos()">🖨 Imprimir</button>
   </div>
 </div>
-<p class="notice">💡 As duas reuniões se comunicam: um irmão escalado numa reunião da semana não é escalado na outra reunião da mesma semana, para ele poder assistir com atenção em pelo menos uma delas.</p>
+<p class="notice">💡 O sorteio evita repetir alguém na mesma reunião de uma semana pra outra (ex: dois sábados seguidos), e só sobrepõe com a outra reunião da semana quando for estritamente necessário. Oração pode repetir sem restrição.</p>
 
 <!-- ================= IRMÃOS ================= -->
 <div class="panel active" id="panel-irmaos">
@@ -614,6 +614,10 @@ function sortear(meeting){
   const roleKeys = flattenRoleKeys(meeting);
   if(roleKeys.length===0){ alert('Ative pelo menos uma função para sortear.'); return; }
   const usageCount = {};
+  // quem foi escalado na ocorrência anterior desta MESMA reunião (ex: sábado passado), pra não repetir seguido.
+  // Oração não entra aqui, porque pode repetir sem problema.
+  let previousOccurrenceUsed = new Set();
+
   rows.forEach(row=>{
     const pairedUsed = getPairedUsed(meeting, row.date);
     const usedToday = new Set();
@@ -630,14 +634,41 @@ function sortear(meeting){
         }
         return;
       }
-      let eligible = state.brothers.filter(b => b.papeis[qualKey(roleKey)]
-        && !usedToday.has(b.id) && !pairedUsed.has(b.id));
-      eligible = shuffle(eligible).sort((a,b)=> (usageCount[a.id]||0) - (usageCount[b.id]||0));
-      const picks = eligible.slice(0, cfg.count);
+      const isOracao = qualKey(roleKey) === 'oracao';
+      const base = b => b.papeis[qualKey(roleKey)] && !usedToday.has(b.id);
+
+      let candidates;
+      if(isOracao){
+        // oração pode repetir de uma semana pra outra; só evita a mesma pessoa no mesmo dia
+        // e, se possível, quem já está na reunião pareada da semana
+        candidates = state.brothers.filter(b => base(b) && !pairedUsed.has(b.id));
+        if(candidates.length===0) candidates = state.brothers.filter(base);
+      } else {
+        // 1ª tentativa (ideal): não repete a semana passada nesta reunião, e não sobrepõe com a outra reunião
+        candidates = state.brothers.filter(b => base(b) && !previousOccurrenceUsed.has(b.id) && !pairedUsed.has(b.id));
+        // 2ª tentativa: permite sobrepor com a outra reunião da semana, mas continua evitando repetir a semana passada
+        if(candidates.length===0){
+          candidates = state.brothers.filter(b => base(b) && !previousOccurrenceUsed.has(b.id));
+        }
+        // 3ª tentativa (último recurso): permite repetir mesmo a semana passada
+        if(candidates.length===0){
+          candidates = state.brothers.filter(base);
+        }
+      }
+
+      candidates = shuffle(candidates).sort((a,b)=> (usageCount[a.id]||0) - (usageCount[b.id]||0));
+      const picks = candidates.slice(0, cfg.count);
       picks.forEach(p=>{ usedToday.add(p.id); usageCount[p.id]=(usageCount[p.id]||0)+1; });
       assign[roleKey] = picks.map(p=>p.id);
     });
     row.assign = assign;
+
+    // atualiza quem "trabalhou" nesta ocorrência (pra bloquear a próxima), ignorando quem só fez Oração
+    previousOccurrenceUsed = new Set();
+    Object.entries(assign).forEach(([roleKey, ids])=>{
+      if(qualKey(roleKey) === 'oracao') return;
+      (ids||[]).forEach(id=> previousOccurrenceUsed.add(id));
+    });
   });
   renderTable(meeting);
 }
