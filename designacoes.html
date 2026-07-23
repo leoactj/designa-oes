@@ -162,7 +162,7 @@
     <button class="btn-ghost" onclick="imprimirJuntos()">🖨 Imprimir</button>
   </div>
 </div>
-<p class="notice">💡 O sorteio evita repetir alguém na mesma reunião de uma semana pra outra (ex: dois sábados seguidos), e só sobrepõe com a outra reunião da semana quando for estritamente necessário. Oração pode repetir sem restrição.</p>
+<p class="notice">💡 O sorteio evita repetir alguém na mesma reunião de uma semana pra outra (ex: dois sábados seguidos), e só sobrepõe com a outra reunião da semana quando for estritamente necessário. Oração pode repetir e coincidir com outra função no mesmo dia.</p>
 
 <!-- ================= IRMÃOS ================= -->
 <div class="panel active" id="panel-irmaos">
@@ -635,12 +635,14 @@ function sortear(meeting){
         return;
       }
       const isOracao = qualKey(roleKey) === 'oracao';
-      const base = b => b.papeis[qualKey(roleKey)] && !usedToday.has(b.id);
+      // quem faz Oração pode ter qualquer outra função no mesmo dia (e vice-versa) — só as demais funções
+      // continuam sem poder se repetir entre si no mesmo dia
+      const base = b => b.papeis[qualKey(roleKey)] && (isOracao || !usedToday.has(b.id));
 
       let candidates;
       if(isOracao){
-        // oração pode repetir de uma semana pra outra; só evita a mesma pessoa no mesmo dia
-        // e, se possível, quem já está na reunião pareada da semana
+        // oração pode repetir de uma semana pra outra e pode coincidir com outra função no mesmo dia;
+        // só tenta, se possível, não coincidir com quem já está na reunião pareada da semana
         candidates = state.brothers.filter(b => base(b) && !pairedUsed.has(b.id));
         if(candidates.length===0) candidates = state.brothers.filter(base);
       } else {
@@ -658,7 +660,10 @@ function sortear(meeting){
 
       candidates = shuffle(candidates).sort((a,b)=> (usageCount[a.id]||0) - (usageCount[b.id]||0));
       const picks = candidates.slice(0, cfg.count);
-      picks.forEach(p=>{ usedToday.add(p.id); usageCount[p.id]=(usageCount[p.id]||0)+1; });
+      picks.forEach(p=>{
+        if(!isOracao) usedToday.add(p.id); // oração não "ocupa" o dia da pessoa pras outras funções
+        usageCount[p.id]=(usageCount[p.id]||0)+1;
+      });
       assign[roleKey] = picks.map(p=>p.id);
     });
     row.assign = assign;
