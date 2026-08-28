@@ -168,13 +168,13 @@
 <div class="panel active" id="panel-irmaos">
   <div class="config-card">
     <h2>Planilha do Google Sheets</h2>
-    <p class="sub">Cole o link do App da Web (o mesmo do Apps Script). O cadastro de irmãos fica salvo lá automaticamente — abra o site em qualquer computador ou celular e ele já vem carregado.</p>
+    <p class="sub">Cole o link do App da Web (o mesmo do Apps Script). O cadastro de irmãos e as designações já sorteadas ficam salvos lá automaticamente — abra o site em qualquer computador ou celular e já vem tudo carregado, do jeito que a última pessoa deixou.</p>
     <div class="row">
       <div class="field" style="flex:1;min-width:320px;">
         <label>Link do Google Sheets</label>
         <input type="text" id="sheets-url" value="https://script.google.com/macros/s/AKfycbyAenrjfYGIwbotHCAAQefo3U2OoiyCzuiMcxXc9bCAo1iLvviKOilvEmI9rZDkknOe/exec" placeholder="https://script.google.com/macros/s/..." onchange="onSheetsUrlChange()">
       </div>
-      <button class="btn-ghost" onclick="syncIrmaosFromSheets(true)">🔄 Recarregar da planilha</button>
+      <button class="btn-ghost" onclick="syncTudoFromSheets(true)">🔄 Recarregar da planilha</button>
     </div>
     <p class="sub" id="sync-status" style="margin:8px 0 0;">Cole o link acima para ativar a sincronização automática.</p>
   </div>
@@ -473,6 +473,7 @@ function gerarDatasPeriodo(){
   const wdFds = parseInt(document.getElementById('fds-weekday').value);
   gerarDatasParaDia('meiodesemana', startVal, weeks, wdMds);
   gerarDatasParaDia('fimdesemana', startVal, weeks, wdFds);
+  agendarSyncDesignacoes();
 }
 function limparTudo(){
   if(!confirm('Isso apaga as datas e designações das duas reuniões. Continuar?')) return;
@@ -480,6 +481,7 @@ function limparTudo(){
   state.rows.meiodesemana = [];
   renderTable('fimdesemana');
   renderTable('meiodesemana');
+  agendarSyncDesignacoes();
 }
 
 /* ===================== GOOGLE SHEETS: LINK COMPARTILHADO ===================== */
@@ -489,7 +491,7 @@ function getSheetsUrl(){
 function onSheetsUrlChange(){
   const url = getSheetsUrl();
   localStorage.setItem('designacoes_sheets_url', url);
-  if(url) syncIrmaosFromSheets(true);
+  if(url) syncTudoFromSheets(true);
 }
 function setSyncStatus(msg){
   const el = document.getElementById('sync-status');
@@ -517,6 +519,7 @@ async function importarDoSheets(){
       }
     });
     renderTable('fimdesemana');
+    if(atualizados>0) agendarSyncDesignacoes();
     if(atualizados===0){
       alert('A planilha respondeu, mas nenhuma data bateu com as datas já geradas aqui. Confira se as datas na planilha estão no formato correto.');
     } else {
@@ -584,6 +587,85 @@ async function syncIrmaosFromSheets(mostrarAviso){
     setSyncStatus('⚠️ Não foi possível carregar da planilha. Confira o link e se o acesso está "Qualquer pessoa".');
     if(mostrarAviso) alert('Não foi possível carregar da planilha. Detalhe técnico: '+err.message);
   }
+}
+
+/* ===================== SINCRONIZAR DESIGNAÇÕES JÁ SORTEADAS COM O SHEETS ===================== */
+// pra funcionar com várias pessoas mexendo, guarda por NOME (não por id local, que muda a cada sessão)
+function brotherIdByName(nome){ const b = state.brothers.find(x=>x.nome===nome); return b ? b.id : null; }
+function brotherNameById(id){ const b = state.brothers.find(x=>x.id===id); return b ? b.nome : null; }
+
+let syncDesignacoesTimer = null;
+function agendarSyncDesignacoes(){
+  const url = getSheetsUrl();
+  if(!url) return; // sem link configurado, não sincroniza (segue só local)
+  setSyncStatus('⏳ Salvando designações na planilha...');
+  clearTimeout(syncDesignacoesTimer);
+  syncDesignacoesTimer = setTimeout(()=> syncDesignacoesToSheets(), 900);
+}
+function buildDesignacoesPayload(meeting){
+  return (state.rows[meeting]||[]).map(row=>{
+    const assign = {};
+    Object.entries(row.assign||{}).forEach(([roleKey, ids])=>{
+      assign[roleKey] = (ids||[]).map(id=> brotherNameById(id)).filter(Boolean);
+    });
+    return { data: row.date, manual: row.manual || {}, assign };
+  });
+}
+async function syncDesignacoesToSheets(){
+  const url = getSheetsUrl();
+  if(!url) return;
+  try{
+    const payload = {
+      action: 'salvarDesignacoes',
+      fimdesemana: buildDesignacoesPayload('fimdesemana'),
+      meiodesemana: buildDesignacoesPayload('meiodesemana')
+    };
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    });
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const agora = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+    setSyncStatus(`☁️ Designações salvas na planilha às ${agora}.`);
+  }catch(err){
+    setSyncStatus('⚠️ Não foi possível salvar as designações na planilha agora. Suas alterações continuam aqui no navegador.');
+  }
+}
+async function syncDesignacoesFromSheets(mostrarAviso){
+  const url = getSheetsUrl();
+  if(!url) return;
+  setSyncStatus('⏳ Carregando designações da planilha...');
+  try{
+    const resp = await fetch(url+'?action=designacoes');
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const dados = await resp.json();
+    ['fimdesemana','meiodesemana'].forEach(meeting=>{
+      const items = dados[meeting] || [];
+      if(items.length===0) return; // nada salvo ainda pra essa reunião — mantém o que já está aqui local
+      state.rows[meeting] = items.map(item=>{
+        const assign = {};
+        Object.entries(item.assign||{}).forEach(([roleKey, nomes])=>{
+          assign[roleKey] = (nomes||[]).map(nome=> brotherIdByName(nome)).filter(id=> id!==null);
+        });
+        return { date: item.data, manual: item.manual || {}, assign };
+      });
+      renderTable(meeting);
+    });
+    const agora = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+    setSyncStatus(`☁️ Designações sincronizadas às ${agora}.`);
+    if(mostrarAviso) alert('Designações atualizadas a partir da planilha.');
+  }catch(err){
+    setSyncStatus('⚠️ Não foi possível carregar as designações da planilha.');
+    if(mostrarAviso) alert('Não foi possível carregar as designações. Detalhe técnico: '+err.message);
+  }
+}
+
+/* ===================== SINCRONIZAÇÃO COMPLETA (irmãos + designações, nesta ordem) ===================== */
+async function syncTudoFromSheets(mostrarAviso){
+  await syncIrmaosFromSheets(false);
+  await syncDesignacoesFromSheets(false);
+  if(mostrarAviso) alert('Planilha carregada: cadastro de irmãos e designações atualizados.');
 }
 
 /* ===================== SORTEIO ===================== */
@@ -685,6 +767,7 @@ function sortearTudo(){
   });
   sortear('fimdesemana');
   sortear('meiodesemana');
+  agendarSyncDesignacoes();
 }
 
 /* ===================== RENDER ===================== */
@@ -842,11 +925,13 @@ function editarSlot(meeting, rowIdx, roleKey, slotIdx, value){
   if(value===''){ row.assign[roleKey][slotIdx] = null; } else { row.assign[roleKey][slotIdx] = parseInt(value); }
   row.assign[roleKey] = row.assign[roleKey].filter(v=>v!==null && v!==undefined);
   renderTable(meeting);
+  agendarSyncDesignacoes();
 }
 function editarManual(meeting, rowIdx, key, value){
   const row = state.rows[meeting][rowIdx];
   if(!row.manual) row.manual = {};
   row.manual[key] = value;
+  agendarSyncDesignacoes();
 }
 
 /* ===================== IMPRIMIR / PDF (as duas juntas, em 1 folha A4) ===================== */
@@ -924,7 +1009,7 @@ renderTable('meiodesemana');
   if(!input) return;
   const savedUrl = localStorage.getItem('designacoes_sheets_url');
   if(savedUrl){ input.value = savedUrl; }
-  if(input.value.trim()){ syncIrmaosFromSheets(false); }
+  if(input.value.trim()){ syncTudoFromSheets(false); }
 })();
 </script>
 </body>
