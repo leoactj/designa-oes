@@ -226,6 +226,13 @@
       <button class="btn-primary" onclick="importarDoSheets()">🔄 Importar do Google Sheets</button>
     </div>
   </div>
+  <div class="config-card">
+    <h2>Importar designações digitadas em texto</h2>
+    <p class="sub">Pra recuperar um sorteio antigo (ex: que você só tem em papel ou print) sem precisar clicar em cada célula aqui. Na sua planilha, abra as abas <strong>"Importar FDS"</strong> e <strong>"Importar MDS"</strong> (se não existirem, clique no botão abaixo uma vez pra criá-las vazias), digite o nome exato de cada irmão em cada coluna, e clique de novo pra trazer pra cá. Só o que estiver preenchido lá é importado — o resto permanece como já está.</p>
+    <div class="row">
+      <button class="btn-primary" onclick="importarDesignacoesTexto()">📝 Importar designações (texto)</button>
+    </div>
+  </div>
   <div class="config-card" id="config-funcoes"></div>
 
   <div class="poster-wrap">
@@ -368,7 +375,7 @@ function addBrother(){
   const input = document.getElementById('new-brother-name');
   const nome = input.value.trim();
   if(!nome) return;
-  const b = { id: nextId++, nome, papeis:{} };
+  const b = { id: nextId++, nome, papeis:{}, somSistema:false };
   sharedQualifications.forEach(q=> b.papeis[q.key] = true);
   state.brothers.push(b);
   input.value='';
@@ -388,13 +395,20 @@ function renderBrothers(){
     const toggles = sharedQualifications.map(q=>`
       <label class="role-toggle"><input type="checkbox" ${b.papeis[q.key]?'checked':''}
         onchange="toggleRole(${b.id},'${q.key}',this.checked)"> ${q.icon} ${q.label}</label>`).join('');
-    return `<div class="brother-row"><div class="name">${b.nome}</div><div class="role-toggles">${toggles}</div>
+    const somToggle = `<label class="role-toggle" style="background:#fff4e0;border-color:#e0c088;" title="Não sorteia sozinho — só limita quantos deste grupo trabalham no mesmo dia">
+      <input type="checkbox" ${b.somSistema?'checked':''} onchange="toggleSomSistema(${b.id},this.checked)"> 🔊 Sistema de Som</label>`;
+    return `<div class="brother-row"><div class="name">${b.nome}</div><div class="role-toggles">${toggles}${somToggle}</div>
       <button class="remove-btn" onclick="removeBrother(${b.id})" title="Remover">✕</button></div>`;
   }).join('');
 }
 function toggleRole(id, key, val){
   const b = state.brothers.find(x=>x.id===id); if(!b) return;
   b.papeis[key] = val;
+  agendarSyncIrmaos();
+}
+function toggleSomSistema(id, val){
+  const b = state.brothers.find(x=>x.id===id); if(!b) return;
+  b.somSistema = val;
   agendarSyncIrmaos();
 }
 
@@ -547,7 +561,8 @@ async function syncIrmaosToSheets(){
       action: 'salvarIrmaos',
       irmaos: state.brothers.map(b=>({
         nome: b.nome,
-        qualificacoes: sharedQualifications.map(q=> b.papeis[q.key] ? q.key : null).filter(Boolean)
+        qualificacoes: sharedQualifications.map(q=> b.papeis[q.key] ? q.key : null).filter(Boolean),
+        somSistema: b.somSistema === true
       }))
     };
     const resp = await fetch(url, {
@@ -572,7 +587,7 @@ async function syncIrmaosFromSheets(mostrarAviso){
     const dados = await resp.json();
     if(Array.isArray(dados) && dados.length){
       state.brothers = dados.map(item=>{
-        const b = { id: nextId++, nome: item.nome, papeis:{} };
+        const b = { id: nextId++, nome: item.nome, papeis:{}, somSistema: item.somSistema===true };
         sharedQualifications.forEach(q=> b.papeis[q.key] = (item.qualificacoes||[]).includes(q.key));
         return b;
       });
@@ -591,7 +606,8 @@ async function syncIrmaosFromSheets(mostrarAviso){
 
 /* ===================== SINCRONIZAR DESIGNAÇÕES JÁ SORTEADAS COM O SHEETS ===================== */
 // pra funcionar com várias pessoas mexendo, guarda por NOME (não por id local, que muda a cada sessão)
-function brotherIdByName(nome){ const b = state.brothers.find(x=>x.nome===nome); return b ? b.id : null; }
+function normalizeName(s){ return (s||'').toString().trim().toLowerCase(); }
+function brotherIdByName(nome){ const alvo = normalizeName(nome); const b = state.brothers.find(x=> normalizeName(x.nome)===alvo); return b ? b.id : null; }
 function brotherNameById(id){ const b = state.brothers.find(x=>x.id===id); return b ? b.nome : null; }
 
 let syncDesignacoesTimer = null;
@@ -668,6 +684,59 @@ async function syncTudoFromSheets(mostrarAviso){
   if(mostrarAviso) alert('Planilha carregada: cadastro de irmãos e designações atualizados.');
 }
 
+/* ===================== IMPORTAR DESIGNAÇÕES EM TEXTO SIMPLES ===================== */
+async function importarDesignacoesTexto(){
+  const url = getSheetsUrl();
+  if(!url){ alert('Cole o link do Google Sheets na aba "Irmãos" primeiro.'); return; }
+  try{
+    const resp = await fetch(url+'?action=importarTexto');
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const dados = await resp.json();
+    let atualizados = 0;
+    let naoEncontrados = new Set();
+
+    ['fimdesemana','meiodesemana'].forEach(meeting=>{
+      (dados[meeting]||[]).forEach(item=>{
+        let row = state.rows[meeting].find(r=> r.date === item.data);
+        if(!row){
+          row = { date: item.data, manual:{}, assign:{} };
+          state.rows[meeting].push(row);
+          state.rows[meeting].sort((a,b)=> a.date.localeCompare(b.date));
+        }
+        let mudouAlgo = false;
+        Object.entries(item.assign||{}).forEach(([roleKey, nomes])=>{
+          const ids = [];
+          (nomes||[]).forEach(nome=>{
+            const id = brotherIdByName(nome);
+            if(id!==null) ids.push(id); else naoEncontrados.add(nome);
+          });
+          if(ids.length){ row.assign[roleKey] = ids; mudouAlgo = true; }
+        });
+        // Palco (Meio de Semana) deriva do Microfone, se ainda não tiver sido definido
+        if(meeting==='meiodesemana' && (!row.assign.palco || row.assign.palco.length===0) && row.assign.microfone && row.assign.microfone.length){
+          row.assign.palco = [row.assign.microfone[0]];
+        }
+        if(mudouAlgo) atualizados++;
+      });
+    });
+
+    renderTable('fimdesemana');
+    renderTable('meiodesemana');
+
+    if(atualizados>0) agendarSyncDesignacoes();
+
+    let msg = atualizados>0
+      ? `Pronto! ${atualizados} data(s) atualizada(s) a partir da planilha de texto.`
+      : 'Nenhuma linha preenchida foi encontrada nas abas "Importar FDS" / "Importar MDS". Se elas acabaram de ser criadas, preencha os nomes e clique de novo.';
+    if(naoEncontrados.size){
+      msg += `\n\nAtenção: estes nomes não bateram com ninguém do cadastro (confira a grafia): ${Array.from(naoEncontrados).join(', ')}`;
+    }
+    alert(msg);
+  }catch(err){
+    alert('Não foi possível importar. Detalhe técnico: '+err.message);
+  }
+}
+
 /* ===================== SORTEIO ===================== */
 function shuffle(arr){
   const a = arr.slice();
@@ -696,13 +765,18 @@ function sortear(meeting){
   const roleKeys = flattenRoleKeys(meeting);
   if(roleKeys.length===0){ alert('Ative pelo menos uma função para sortear.'); return; }
   const usageCount = {};
+  const lastUsedRowIndex = {}; // pra dar prioridade a quem está há mais tempo sem ser chamado
   // quem foi escalado na ocorrência anterior desta MESMA reunião (ex: sábado passado), pra não repetir seguido.
   // Oração não entra aqui, porque pode repetir sem problema.
   let previousOccurrenceUsed = new Set();
+  // time do sistema de som: nunca todos ao mesmo tempo no mesmo dia (sempre sobra 1 livre pro som)
+  const soundIds = new Set(state.brothers.filter(b=>b.somSistema).map(b=>b.id));
+  const soundMaxPerDay = soundIds.size > 1 ? soundIds.size - 1 : soundIds.size;
 
-  rows.forEach(row=>{
+  rows.forEach((row, rowIdx)=>{
     const pairedUsed = getPairedUsed(meeting, row.date);
     const usedToday = new Set();
+    const soundUsedToday = new Set();
     const assign = {};
     roleKeys.forEach(roleKey=>{
       const cfg = getRoleCfg(meeting, roleKey);
@@ -721,30 +795,52 @@ function sortear(meeting){
       // continuam sem poder se repetir entre si no mesmo dia
       const base = b => b.papeis[qualKey(roleKey)] && (isOracao || !usedToday.has(b.id));
 
-      let candidates;
+      let pool;
       if(isOracao){
         // oração pode repetir de uma semana pra outra e pode coincidir com outra função no mesmo dia;
         // só tenta, se possível, não coincidir com quem já está na reunião pareada da semana
-        candidates = state.brothers.filter(b => base(b) && !pairedUsed.has(b.id));
-        if(candidates.length===0) candidates = state.brothers.filter(base);
+        pool = state.brothers.filter(b => base(b) && !pairedUsed.has(b.id));
+        if(pool.length===0) pool = state.brothers.filter(base);
       } else {
         // 1ª tentativa (ideal): não repete a semana passada nesta reunião, e não sobrepõe com a outra reunião
-        candidates = state.brothers.filter(b => base(b) && !previousOccurrenceUsed.has(b.id) && !pairedUsed.has(b.id));
+        pool = state.brothers.filter(b => base(b) && !previousOccurrenceUsed.has(b.id) && !pairedUsed.has(b.id));
         // 2ª tentativa: permite sobrepor com a outra reunião da semana, mas continua evitando repetir a semana passada
-        if(candidates.length===0){
-          candidates = state.brothers.filter(b => base(b) && !previousOccurrenceUsed.has(b.id));
+        if(pool.length===0){
+          pool = state.brothers.filter(b => base(b) && !previousOccurrenceUsed.has(b.id));
         }
         // 3ª tentativa (último recurso): permite repetir mesmo a semana passada
-        if(candidates.length===0){
-          candidates = state.brothers.filter(base);
+        if(pool.length===0){
+          pool = state.brothers.filter(base);
         }
       }
 
-      candidates = shuffle(candidates).sort((a,b)=> (usageCount[a.id]||0) - (usageCount[b.id]||0));
-      const picks = candidates.slice(0, cfg.count);
+      // ordena por: quem foi menos usado no total, depois quem está há mais tempo sem ser chamado
+      // (embaralha primeiro pra desempatar aleatoriamente quando tudo estiver igual)
+      pool = shuffle(pool).sort((a,b)=>{
+        const diffCount = (usageCount[a.id]||0) - (usageCount[b.id]||0);
+        if(diffCount !== 0) return diffCount;
+        const lastA = lastUsedRowIndex[a.id] ?? -1;
+        const lastB = lastUsedRowIndex[b.id] ?? -1;
+        return lastA - lastB;
+      });
+
+      // escolhe um por vez (não em bloco), pra poder aplicar a regra do sistema de som
+      // mesmo quando uma função precisa de mais de uma pessoa (ex: 2 microfones)
+      const picks = [];
+      for(let s=0; s<cfg.count; s++){
+        let disponiveis = pool.filter(b => !picks.some(p=>p.id===b.id));
+        if(soundIds.size > 1 && soundUsedToday.size >= soundMaxPerDay){
+          disponiveis = disponiveis.filter(b => !soundIds.has(b.id));
+        }
+        if(disponiveis.length===0) break;
+        const chosen = disponiveis[0];
+        picks.push(chosen);
+        if(!isOracao) usedToday.add(chosen.id);
+        if(soundIds.has(chosen.id)) soundUsedToday.add(chosen.id);
+      }
       picks.forEach(p=>{
-        if(!isOracao) usedToday.add(p.id); // oração não "ocupa" o dia da pessoa pras outras funções
         usageCount[p.id]=(usageCount[p.id]||0)+1;
+        lastUsedRowIndex[p.id] = rowIdx;
       });
       assign[roleKey] = picks.map(p=>p.id);
     });
