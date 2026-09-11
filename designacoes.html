@@ -158,11 +158,19 @@
   </div>
   <div class="actions">
     <button class="btn-gold" onclick="sortearTudo()">🎲 Designar</button>
+    <button class="btn-danger" onclick="resortearDoZero()">🔁 Sortear tudo de novo</button>
     <button class="btn-primary" onclick="baixarPDFJuntos()">⬇ Baixar PDF</button>
     <button class="btn-ghost" onclick="imprimirJuntos()">🖨 Imprimir</button>
   </div>
 </div>
-<p class="notice">💡 O sorteio evita repetir alguém na mesma reunião de uma semana pra outra (ex: dois sábados seguidos), e só sobrepõe com a outra reunião da semana quando for estritamente necessário. Oração pode repetir e coincidir com outra função no mesmo dia.</p>
+<p class="notice">💡 "Designar" só preenche o que ainda está vazio (não mexe no que já foi sorteado ou editado). A justiça é calculada com base em TUDO que já foi designado nas duas reuniões — quem trabalhou menos, ou há mais tempo não trabalha, tem prioridade. Oração pode repetir e coincidir com outra função no mesmo dia. Use "Sortear tudo de novo" só se quiser apagar e refazer tudo do zero.</p>
+<p class="notice" style="background:#fff4e0;border-color:#e0c088;">
+  <label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+    <input type="checkbox" id="pair-fds-mds" onchange="togglePairFDSandMDS(this.checked)">
+    🧪 <strong>Testar:</strong> quem for escalado de Indicador ou Microfone no Sábado também fica na Quarta da mesma semana (menos semanas diferentes tocadas, folgas mais longas depois). Só vale pra designações novas — não mexe no que já está preenchido.
+  </label>
+  <br><button class="btn-ghost" style="margin-top:8px;" onclick="testarPrincipioEmparelhado()">🧪 Testar agora nas designações já feitas (só Indicador/Microfone)</button>
+</p>
 
 <!-- ================= IRMÃOS ================= -->
 <div class="panel active" id="panel-irmaos">
@@ -258,6 +266,7 @@
 /* ===================== ESTADO ===================== */
 let state = {
   periodo: "Julho / Agosto 2026",
+  pairFDSandMDS: false, // modo experimental: mesma pessoa no Indicador/Microfone das duas reuniões da semana
   brothers: [],
   roleConfig: {
     // funções que existem (e valem) nas duas reuniões — configuradas uma única vez
@@ -507,6 +516,10 @@ function onSheetsUrlChange(){
   localStorage.setItem('designacoes_sheets_url', url);
   if(url) syncTudoFromSheets(true);
 }
+function togglePairFDSandMDS(val){
+  state.pairFDSandMDS = val;
+  localStorage.setItem('designacoes_pair_fds_mds', val ? '1' : '0');
+}
 function setSyncStatus(msg){
   const el = document.getElementById('sync-status');
   if(el) el.textContent = msg;
@@ -743,10 +756,10 @@ function shuffle(arr){
   for(let i=a.length-1;i>0;i--){ const j = Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
   return a;
 }
-function getPairedUsed(meeting, rowDate){
+function getPairedRow(meeting, rowDate){
   const other = meeting==='fimdesemana' ? 'meiodesemana' : 'fimdesemana';
   const otherRows = state.rows[other];
-  if(!otherRows || otherRows.length===0) return new Set();
+  if(!otherRows || otherRows.length===0) return null;
   let closest = null, minDiff = Infinity;
   const d1 = new Date(rowDate+'T12:00:00');
   otherRows.forEach(r=>{
@@ -754,18 +767,44 @@ function getPairedUsed(meeting, rowDate){
     const diff = Math.abs(d1-d2)/(1000*60*60*24);
     if(diff < minDiff){ minDiff = diff; closest = r; }
   });
-  if(!closest || minDiff > 5) return new Set();
+  if(!closest || minDiff > 5) return null;
+  return closest;
+}
+function getPairedUsed(meeting, rowDate){
+  const closest = getPairedRow(meeting, rowDate);
+  if(!closest) return new Set();
   const used = new Set();
   Object.values(closest.assign||{}).forEach(arr=>{ (arr||[]).forEach(id=>used.add(id)); });
   return used;
 }
-function sortear(meeting){
+// cargos que, no modo "emparelhar", tentam usar a MESMA pessoa nas duas reuniões da semana
+const pairableRoleKeys = ['indicadorInterno','indicadorExterno','microfone'];
+// calcula, a partir do que JÁ está preenchido (nas duas reuniões, todas as semanas geradas),
+// quantas vezes cada irmão já foi escalado e a data mais recente em que trabalhou.
+// isso é o que garante justiça de verdade — não zera a cada clique em "Designar".
+function computeHistorico(){
+  const usageCount = {};
+  const lastUsedDate = {};
+  ['fimdesemana','meiodesemana'].forEach(m=>{
+    (state.rows[m]||[]).forEach(row=>{
+      Object.entries(row.assign||{}).forEach(([roleKey, ids])=>{
+        (ids||[]).forEach(id=>{
+          usageCount[id] = (usageCount[id]||0) + 1;
+          if(!lastUsedDate[id] || row.date > lastUsedDate[id]) lastUsedDate[id] = row.date;
+        });
+      });
+    });
+  });
+  return { usageCount, lastUsedDate };
+}
+
+function sortear(meeting, historico){
   const rows = state.rows[meeting];
   if(!rows || rows.length===0){ alert('Gere as datas primeiro.'); return; }
   const roleKeys = flattenRoleKeys(meeting);
   if(roleKeys.length===0){ alert('Ative pelo menos uma função para sortear.'); return; }
-  const usageCount = {};
-  const lastUsedRowIndex = {}; // pra dar prioridade a quem está há mais tempo sem ser chamado
+  const usageCount = historico.usageCount;
+  const lastUsedDate = historico.lastUsedDate;
   // quem foi escalado na ocorrência anterior desta MESMA reunião (ex: sábado passado), pra não repetir seguido.
   // Oração não entra aqui, porque pode repetir sem problema.
   let previousOccurrenceUsed = new Set();
@@ -773,33 +812,51 @@ function sortear(meeting){
   const soundIds = new Set(state.brothers.filter(b=>b.somSistema).map(b=>b.id));
   const soundMaxPerDay = soundIds.size > 1 ? soundIds.size - 1 : soundIds.size;
 
-  rows.forEach((row, rowIdx)=>{
+  rows.forEach(row=>{
+    if(!row.assign) row.assign = {};
     const pairedUsed = getPairedUsed(meeting, row.date);
     const usedToday = new Set();
     const soundUsedToday = new Set();
-    const assign = {};
+    // considera quem JÁ está preenchido nesta linha (não mexe, mas conta pra não repetir na mesma linha)
+    Object.entries(row.assign).forEach(([roleKey, ids])=>{
+      const isOracaoExistente = qualKey(roleKey) === 'oracao';
+      (ids||[]).forEach(id=>{
+        if(!isOracaoExistente) usedToday.add(id);
+        if(soundIds.has(id)) soundUsedToday.add(id);
+      });
+    });
+
     roleKeys.forEach(roleKey=>{
       const cfg = getRoleCfg(meeting, roleKey);
       if(cfg.derived){
-        const source = assign[cfg.deriveFrom] || [];
-        if(source.length){
-          const chosen = source[Math.floor(Math.random()*source.length)];
-          assign[roleKey] = [chosen];
-        } else {
-          assign[roleKey] = [];
+        // só preenche Palco se ainda estiver vazio e já houver Microfone escolhido
+        if(!row.assign[roleKey] || row.assign[roleKey].length===0){
+          const source = row.assign[cfg.deriveFrom] || [];
+          if(source.length) row.assign[roleKey] = [ source[Math.floor(Math.random()*source.length)] ];
         }
         return;
       }
+      const already = row.assign[roleKey] || [];
+      const faltam = cfg.count - already.length;
+      if(faltam <= 0) return; // já preenchido — não mexe (respeita o que já foi designado/comunicado)
+
       const isOracao = qualKey(roleKey) === 'oracao';
       // quem faz Oração pode ter qualquer outra função no mesmo dia (e vice-versa) — só as demais funções
       // continuam sem poder se repetir entre si no mesmo dia
-      const base = b => b.papeis[qualKey(roleKey)] && (isOracao || !usedToday.has(b.id));
+      const base = b => b.papeis[qualKey(roleKey)] && (isOracao || !usedToday.has(b.id)) && already.indexOf(b.id)===-1;
+
+      const isPairableRole = state.pairFDSandMDS && pairableRoleKeys.includes(roleKey);
 
       let pool;
       if(isOracao){
         // oração pode repetir de uma semana pra outra e pode coincidir com outra função no mesmo dia;
         // só tenta, se possível, não coincidir com quem já está na reunião pareada da semana
         pool = state.brothers.filter(b => base(b) && !pairedUsed.has(b.id));
+        if(pool.length===0) pool = state.brothers.filter(base);
+      } else if(isPairableRole){
+        // modo "emparelhar": aqui queremos JUSTAMENTE reaproveitar quem já está na reunião pareada
+        // (não excluímos por pairedUsed); só evitamos repetir a semana passada desta mesma reunião
+        pool = state.brothers.filter(b => base(b) && !previousOccurrenceUsed.has(b.id));
         if(pool.length===0) pool = state.brothers.filter(base);
       } else {
         // 1ª tentativa (ideal): não repete a semana passada nesta reunião, e não sobrepõe com a outra reunião
@@ -814,41 +871,56 @@ function sortear(meeting){
         }
       }
 
-      // ordena por: quem foi menos usado no total, depois quem está há mais tempo sem ser chamado
-      // (embaralha primeiro pra desempatar aleatoriamente quando tudo estiver igual)
+      // ordena por: quem foi menos usado no total (contando as duas reuniões, todas as semanas já geradas),
+      // depois quem está há mais tempo sem ser chamado (embaralha primeiro pra desempatar aleatoriamente)
       pool = shuffle(pool).sort((a,b)=>{
         const diffCount = (usageCount[a.id]||0) - (usageCount[b.id]||0);
         if(diffCount !== 0) return diffCount;
-        const lastA = lastUsedRowIndex[a.id] ?? -1;
-        const lastB = lastUsedRowIndex[b.id] ?? -1;
-        return lastA - lastB;
+        const lastA = lastUsedDate[a.id] || '';
+        const lastB = lastUsedDate[b.id] || '';
+        if(lastA < lastB) return -1;
+        if(lastA > lastB) return 1;
+        return 0;
       });
+
+      // modo "emparelhar": dá prioridade a quem já está escalado nesse MESMO cargo na reunião
+      // pareada da semana (mantendo a ordem de justiça entre os "preferidos" entre si)
+      if(isPairableRole){
+        const pairedRow = getPairedRow(meeting, row.date);
+        const idsNaPareada = (pairedRow && pairedRow.assign && pairedRow.assign[roleKey]) || [];
+        if(idsNaPareada.length){
+          pool = pool.slice().sort((a,b)=>{
+            const prefA = idsNaPareada.includes(a.id) ? 0 : 1;
+            const prefB = idsNaPareada.includes(b.id) ? 0 : 1;
+            return prefA - prefB;
+          });
+        }
+      }
 
       // escolhe um por vez (não em bloco), pra poder aplicar a regra do sistema de som
       // mesmo quando uma função precisa de mais de uma pessoa (ex: 2 microfones)
-      const picks = [];
-      for(let s=0; s<cfg.count; s++){
-        let disponiveis = pool.filter(b => !picks.some(p=>p.id===b.id));
+      const novosPicks = [];
+      for(let s=0; s<faltam; s++){
+        let disponiveis = pool.filter(b => !novosPicks.some(p=>p.id===b.id));
         if(soundIds.size > 1 && soundUsedToday.size >= soundMaxPerDay){
           disponiveis = disponiveis.filter(b => !soundIds.has(b.id));
         }
         if(disponiveis.length===0) break;
         const chosen = disponiveis[0];
-        picks.push(chosen);
+        novosPicks.push(chosen);
         if(!isOracao) usedToday.add(chosen.id);
         if(soundIds.has(chosen.id)) soundUsedToday.add(chosen.id);
       }
-      picks.forEach(p=>{
-        usageCount[p.id]=(usageCount[p.id]||0)+1;
-        lastUsedRowIndex[p.id] = rowIdx;
+      novosPicks.forEach(p=>{
+        usageCount[p.id] = (usageCount[p.id]||0) + 1;
+        lastUsedDate[p.id] = row.date;
       });
-      assign[roleKey] = picks.map(p=>p.id);
+      row.assign[roleKey] = already.concat(novosPicks.map(p=>p.id));
     });
-    row.assign = assign;
 
     // atualiza quem "trabalhou" nesta ocorrência (pra bloquear a próxima), ignorando quem só fez Oração
     previousOccurrenceUsed = new Set();
-    Object.entries(assign).forEach(([roleKey, ids])=>{
+    Object.entries(row.assign).forEach(([roleKey, ids])=>{
       if(qualKey(roleKey) === 'oracao') return;
       (ids||[]).forEach(id=> previousOccurrenceUsed.add(id));
     });
@@ -856,14 +928,43 @@ function sortear(meeting){
   renderTable(meeting);
 }
 function sortearTudo(){
-  // limpa as designações antigas das duas reuniões antes de sortear de novo —
-  // sem isso, um sorteio anterior "contaminava" o cálculo de quem já está ocupado na outra reunião
+  // preenche só o que ainda está vazio, preservando qualquer designação já feita (manual ou de um sorteio anterior)
+  const historico = computeHistorico();
+  sortear('fimdesemana', historico);
+  sortear('meiodesemana', historico);
+  agendarSyncDesignacoes();
+}
+function resortearDoZero(){
+  if(!confirm('Isso vai APAGAR todas as designações já sorteadas (Fim de Semana e Meio de Semana) e sortear tudo de novo do zero. As datas continuam as mesmas, só as designações são refeitas. Continuar?')) return;
   ['fimdesemana','meiodesemana'].forEach(m=>{
     (state.rows[m]||[]).forEach(row=> row.assign = {});
   });
-  sortear('fimdesemana');
-  sortear('meiodesemana');
+  const historico = computeHistorico(); // já vai começar zerado, já que acabamos de limpar tudo
+  sortear('fimdesemana', historico);
+  sortear('meiodesemana', historico);
   agendarSyncDesignacoes();
+}
+function testarPrincipioEmparelhado(){
+  if(!confirm('Isso vai LIMPAR só as células de Indicador, Microfone e Palco (nas duas reuniões, todas as semanas já geradas) e resortear elas de novo já usando o novo princípio (mesma pessoa no Sábado e na Quarta). Presidente, Leitor, Oração e o que você digitou manualmente (Tema/Orador/Congregação) continuam exatamente como estão. Continuar?')) return;
+
+  const rolesParaLimpar = ['indicadorInterno','indicadorExterno','microfone','palco'];
+  ['fimdesemana','meiodesemana'].forEach(m=>{
+    (state.rows[m]||[]).forEach(row=>{
+      if(!row.assign) return;
+      rolesParaLimpar.forEach(k=> delete row.assign[k]);
+    });
+  });
+
+  state.pairFDSandMDS = true;
+  localStorage.setItem('designacoes_pair_fds_mds', '1');
+  const checkbox = document.getElementById('pair-fds-mds');
+  if(checkbox) checkbox.checked = true;
+
+  const historico = computeHistorico();
+  sortear('fimdesemana', historico);
+  sortear('meiodesemana', historico);
+  agendarSyncDesignacoes();
+  alert('Pronto! Indicador, Microfone e Palco foram refeitos com o novo princípio. Confira nas tabelas abaixo e compare com o que estava antes.');
 }
 
 /* ===================== RENDER ===================== */
@@ -1106,6 +1207,14 @@ renderTable('meiodesemana');
   const savedUrl = localStorage.getItem('designacoes_sheets_url');
   if(savedUrl){ input.value = savedUrl; }
   if(input.value.trim()){ syncTudoFromSheets(false); }
+})();
+(function initPairPreference(){
+  const savedPair = localStorage.getItem('designacoes_pair_fds_mds');
+  const checkbox = document.getElementById('pair-fds-mds');
+  if(savedPair === '1' && checkbox){
+    checkbox.checked = true;
+    state.pairFDSandMDS = true;
+  }
 })();
 </script>
 </body>
