@@ -163,14 +163,7 @@
     <button class="btn-ghost" onclick="imprimirJuntos()">🖨 Imprimir</button>
   </div>
 </div>
-<p class="notice">💡 "Designar" só preenche o que ainda está vazio (não mexe no que já foi sorteado ou editado). A justiça é calculada com base em TUDO que já foi designado nas duas reuniões — quem trabalhou menos, ou há mais tempo não trabalha, tem prioridade. Oração pode repetir e coincidir com outra função no mesmo dia. Use "Sortear tudo de novo" só se quiser apagar e refazer tudo do zero.</p>
-<p class="notice" style="background:#fff4e0;border-color:#e0c088;">
-  <label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
-    <input type="checkbox" id="pair-fds-mds" onchange="togglePairFDSandMDS(this.checked)">
-    🧪 <strong>Testar:</strong> quem for escalado de Indicador ou Microfone no Sábado também fica na Quarta da mesma semana (menos semanas diferentes tocadas, folgas mais longas depois). Só vale pra designações novas — não mexe no que já está preenchido.
-  </label>
-  <br><button class="btn-ghost" style="margin-top:8px;" onclick="testarPrincipioEmparelhado()">🧪 Testar agora nas designações já feitas (só Indicador/Microfone)</button>
-</p>
+<p class="notice">💡 As designações agora são semanais: quem for escalado de Indicador ou Microfone no Sábado também fica na Quarta da mesma semana. "Designar" só preenche o que ainda está vazio (não mexe no que já foi sorteado ou editado). A justiça é calculada com base em TUDO que já foi designado — quem trabalhou menos, ou há mais tempo não trabalha, tem prioridade, e ninguém repete semanas seguidas. Oração pode repetir e coincidir com outra função no mesmo dia. Use "Sortear tudo de novo" só se quiser apagar e refazer tudo do zero.</p>
 
 <!-- ================= IRMÃOS ================= -->
 <div class="panel active" id="panel-irmaos">
@@ -266,7 +259,6 @@
 /* ===================== ESTADO ===================== */
 let state = {
   periodo: "Julho / Agosto 2026",
-  pairFDSandMDS: false, // modo experimental: mesma pessoa no Indicador/Microfone das duas reuniões da semana
   brothers: [],
   roleConfig: {
     // funções que existem (e valem) nas duas reuniões — configuradas uma única vez
@@ -515,10 +507,6 @@ function onSheetsUrlChange(){
   const url = getSheetsUrl();
   localStorage.setItem('designacoes_sheets_url', url);
   if(url) syncTudoFromSheets(true);
-}
-function togglePairFDSandMDS(val){
-  state.pairFDSandMDS = val;
-  localStorage.setItem('designacoes_pair_fds_mds', val ? '1' : '0');
 }
 function setSyncStatus(msg){
   const el = document.getElementById('sync-status');
@@ -845,7 +833,7 @@ function sortear(meeting, historico){
       // continuam sem poder se repetir entre si no mesmo dia
       const base = b => b.papeis[qualKey(roleKey)] && (isOracao || !usedToday.has(b.id)) && already.indexOf(b.id)===-1;
 
-      const isPairableRole = state.pairFDSandMDS && pairableRoleKeys.includes(roleKey);
+      const isPairableRole = pairableRoleKeys.includes(roleKey);
 
       let pool;
       if(isOracao){
@@ -944,29 +932,6 @@ function resortearDoZero(){
   sortear('meiodesemana', historico);
   agendarSyncDesignacoes();
 }
-function testarPrincipioEmparelhado(){
-  if(!confirm('Isso vai LIMPAR só as células de Indicador, Microfone e Palco (nas duas reuniões, todas as semanas já geradas) e resortear elas de novo já usando o novo princípio (mesma pessoa no Sábado e na Quarta). Presidente, Leitor, Oração e o que você digitou manualmente (Tema/Orador/Congregação) continuam exatamente como estão. Continuar?')) return;
-
-  const rolesParaLimpar = ['indicadorInterno','indicadorExterno','microfone','palco'];
-  ['fimdesemana','meiodesemana'].forEach(m=>{
-    (state.rows[m]||[]).forEach(row=>{
-      if(!row.assign) return;
-      rolesParaLimpar.forEach(k=> delete row.assign[k]);
-    });
-  });
-
-  state.pairFDSandMDS = true;
-  localStorage.setItem('designacoes_pair_fds_mds', '1');
-  const checkbox = document.getElementById('pair-fds-mds');
-  if(checkbox) checkbox.checked = true;
-
-  const historico = computeHistorico();
-  sortear('fimdesemana', historico);
-  sortear('meiodesemana', historico);
-  agendarSyncDesignacoes();
-  alert('Pronto! Indicador, Microfone e Palco foram refeitos com o novo princípio. Confira nas tabelas abaixo e compare com o que estava antes.');
-}
-
 /* ===================== RENDER ===================== */
 function formatDate(iso){ const [y,m,d] = iso.split('-'); return `${d}/${m}`; }
 const weekdayLabels = {fds:{6:'SÁBADO',0:'DOMINGO'}, mds:{1:'SEGUNDA-FEIRA',2:'TERÇA-FEIRA',3:'QUARTA-FEIRA',4:'QUINTA-FEIRA',5:'SEXTA-FEIRA'}};
@@ -1207,14 +1172,6 @@ renderTable('meiodesemana');
   const savedUrl = localStorage.getItem('designacoes_sheets_url');
   if(savedUrl){ input.value = savedUrl; }
   if(input.value.trim()){ syncTudoFromSheets(false); }
-})();
-(function initPairPreference(){
-  const savedPair = localStorage.getItem('designacoes_pair_fds_mds');
-  const checkbox = document.getElementById('pair-fds-mds');
-  if(savedPair === '1' && checkbox){
-    checkbox.checked = true;
-    state.pairFDSandMDS = true;
-  }
 })();
 </script>
 </body>
