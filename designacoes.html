@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
   :root{
     --ink:#1F2430;
@@ -228,6 +229,15 @@
     </div>
   </div>
   <div class="config-card">
+    <h2>Importar PDF pronto</h2>
+    <p class="sub">Escolha um PDF de designações. O site preenche só os campos que estão vazios; o que já está preenchido não muda. Se algum campo for diferente do PDF, ele aparece na lista abaixo. Gere as datas antes. PDFs baixados daqui voltam completos. PDFs de outros programas precisam ter texto (uma foto do PDF não serve).</p>
+    <div class="row">
+      <input type="file" id="pdf-import" accept=".pdf,application/pdf" style="display:none" onchange="importarPDF(event)">
+      <button class="btn-primary" onclick="document.getElementById('pdf-import').click()">📄 Escolher PDF e importar</button>
+    </div>
+    <div id="import-pdf-resultado" style="margin-top:12px;font-size:.85rem;line-height:1.5;"></div>
+  </div>
+  <div class="config-card">
     <h2>Importar designações digitadas em texto</h2>
     <p class="sub">Pra recuperar um sorteio antigo (ex: que você só tem em papel ou print) sem precisar clicar em cada célula aqui. Na sua planilha, abra as abas <strong>"Importar FDS"</strong> e <strong>"Importar MDS"</strong> (se não existirem, clique no botão abaixo uma vez pra criá-las vazias), digite o nome exato de cada irmão em cada coluna, e clique de novo pra trazer pra cá. Só o que estiver preenchido lá é importado — o resto permanece como já está.</p>
     <div class="row">
@@ -240,7 +250,7 @@
     <div class="poster-inner">
       <span class="corner tl">❧</span><span class="corner tr">❧</span><span class="corner bl">❧</span><span class="corner br">❧</span>
       <div class="poster-title"><span class="drop">D</span>ESIGNAÇÕES DE <span class="drop">P</span>RIVILÉGIOS</div>
-      <input class="period-input" id="poster-periodo" value="Julho / Agosto 2026" oninput="state.periodo=this.value; syncPeriodDisplay();">
+      <input class="period-input" id="poster-periodo" value="Julho / Agosto 2026" readonly title="Muda sozinho conforme as datas geradas">
       <div class="period-display" id="poster-periodo-display"></div>
       <div class="divider">❖</div>
       <div class="section-band blue" id="band-fds">REUNIÃO DO FIM DE SEMANA (SÁBADO)</div>
@@ -937,6 +947,7 @@ function formatDate(iso){ const [y,m,d] = iso.split('-'); return `${d}/${m}`; }
 const weekdayLabels = {fds:{6:'SÁBADO',0:'DOMINGO'}, mds:{1:'SEGUNDA-FEIRA',2:'TERÇA-FEIRA',3:'QUARTA-FEIRA',4:'QUINTA-FEIRA',5:'SEXTA-FEIRA'}};
 
 function renderTable(meeting){
+  atualizarPeriodo();
   renderRoleConfig();
   const rows = state.rows[meeting];
   const cols = getActiveCols(meeting);
@@ -1039,6 +1050,26 @@ function renderTable(meeting){
 
   const printContainer = document.getElementById('tabela-'+meeting+'-print');
   if(printContainer) printContainer.innerHTML = buildStaticTableHTML(meeting, cols);
+}
+const nomesMeses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+// monta o texto do período (ex: "Setembro / Outubro 2026") a partir das datas das duas reuniões
+function atualizarPeriodo(){
+  const datas = [];
+  ['fimdesemana','meiodesemana'].forEach(m=> (state.rows[m]||[]).forEach(r=>{ if(r.date) datas.push(r.date); }));
+  if(datas.length===0) return;
+  datas.sort();
+  const [y1,m1] = datas[0].split('-').map(Number);
+  const [y2,m2] = datas[datas.length-1].split('-').map(Number);
+  const A = nomesMeses[m1-1], B = nomesMeses[m2-1];
+  const seguidos = (y1===y2 && m2-m1===1) || (y2===y1+1 && m1===12 && m2===1);
+  let label;
+  if(y1===y2 && m1===m2) label = `${A} ${y1}`;
+  else if(y1===y2) label = seguidos ? `${A} / ${B} ${y1}` : `${A} a ${B} ${y1}`;
+  else label = seguidos ? `${A} ${y1} / ${B} ${y2}` : `${A} ${y1} a ${B} ${y2}`;
+  state.periodo = label;
+  const input = document.getElementById('poster-periodo');
+  if(input) input.value = label;
+  syncPeriodDisplay();
 }
 function syncPeriodDisplay(){
   const el = document.getElementById('poster-periodo-display');
@@ -1145,6 +1176,10 @@ async function baixarPDFJuntos(){
     const canvas = await html2canvas(wrap, {scale:2.8, backgroundColor:'#ffffff'});
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF('p','mm','a4');
+    try{
+      const dadosPdf = { fimdesemana: buildDesignacoesPayload('fimdesemana'), meiodesemana: buildDesignacoesPayload('meiodesemana') };
+      pdf.setProperties({ title:'Designações de Privilégios', keywords:'DESIGNACOES:'+btoa(unescape(encodeURIComponent(JSON.stringify(dadosPdf)))) });
+    }catch(e){}
     const pageWmm = 210, pageHmm = 297, marginmm = 8;
     const usableWmm = pageWmm - marginmm*2, usableHmm = pageHmm - marginmm*2;
     // preenche a folha inteira (o ajuste de fonte já deixou o conteúdo do tamanho certo pra isso)
@@ -1157,6 +1192,252 @@ async function baixarPDFJuntos(){
     document.body.classList.remove('printing');
     document.documentElement.style.setProperty('--pdf-font-size', '11px');
     activateTab(originalTab);
+  }
+}
+
+/* ---- leitura do texto de um PDF de designações (funções puras, sem depender da tela) ---- */
+function normTxt(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+
+const PDF_COLUNAS = {
+  fimdesemana: [
+    {k:'presidente', rot:['presidente']}, {k:'tema', rot:['tema']}, {k:'orador', rot:['orador']},
+    {k:'congregacao', rot:['congregacao']}, {k:'indicadores', rot:['indicadores','indicador']},
+    {k:'microfone', rot:['microfone']}, {k:'leitor', rot:['leitor']}, {k:'oracaoFinal', rot:['oracaofinal']}
+  ],
+  meiodesemana: [
+    {k:'oracaoInicial', rot:['oracaoinicial']}, {k:'presidente', rot:['presidente']},
+    {k:'indicadores', rot:['indicadores','indicador']}, {k:'microfone', rot:['microfone']},
+    {k:'leitor', rot:['leitor']}, {k:'palco', rot:['palco']}, {k:'oracaoFinal', rot:['oracaofinal']}
+  ]
+};
+
+// separa o texto de uma célula em nomes ("Lucas / Edmilson" vira dois nomes)
+function nomesDaCelula(linhas){
+  const out = [];
+  linhas.forEach(l=> l.split('/').forEach(p=>{
+    const t = p.trim();
+    if(t && t!=='—' && t!=='-') out.push(t);
+  }));
+  return out;
+}
+
+// items: [{str, x, w, y}] com y crescendo para baixo (páginas seguidas somam 100000 por página)
+function extrairDeItens(items){
+  const TOL = 3;
+  const ord = items.filter(i=>i.str && i.str.trim()).sort((a,b)=> a.y-b.y || a.x-b.x);
+  const linhas = [];
+  ord.forEach(it=>{
+    const l = linhas.find(L=> Math.abs(L.y-it.y) <= TOL);
+    if(l) l.itens.push(it); else linhas.push({y: it.y, itens:[it]});
+  });
+  // junta pedaços de texto quase colados (ex: "Oração" + "Final")
+  linhas.forEach(L=>{
+    L.itens.sort((a,b)=>a.x-b.x);
+    const m = [];
+    L.itens.forEach(it=>{
+      const last = m[m.length-1];
+      if(last && it.x - (last.x+last.w) < 3.5){ last.str = last.str.trimEnd()+' '+it.str.trimStart(); last.w = it.x+it.w-last.x; }
+      else m.push({str:it.str, x:it.x, w:it.w, y:L.y});
+    });
+    L.itens = m;
+  });
+  linhas.sort((a,b)=>a.y-b.y);
+
+  // seções: onde começa cada reunião
+  const secoes = [];
+  linhas.forEach(L=>{
+    const t = normTxt(L.itens.map(i=>i.str).join(''));
+    if(t.includes('meiodesemana')) secoes.push({meeting:'meiodesemana', y:L.y});
+    else if(t.includes('fimdesemana')) secoes.push({meeting:'fimdesemana', y:L.y});
+  });
+  if(secoes.length===0){
+    const todos = normTxt(linhas.map(L=>L.itens.map(i=>i.str).join('')).join(''));
+    const meeting = (todos.includes('palco')||todos.includes('oracaoinicial')) ? 'meiodesemana' : 'fimdesemana';
+    secoes.push({meeting, y:-1});
+  }
+
+  const resultado = { fimdesemana: [], meiodesemana: [] };
+  secoes.forEach((sec, idx)=>{
+    const fim = idx+1 < secoes.length ? secoes[idx+1].y : Infinity;
+    const itens = [];
+    linhas.forEach(L=>{ if(L.y > sec.y && L.y < fim) L.itens.forEach(i=> itens.push(i)); });
+    const anchors = itens.filter(i=> /^\d{1,2}\/\d{1,2}$/.test(i.str.trim())).sort((a,b)=>a.y-b.y);
+    if(anchors.length===0) return;
+    let rowH = 30;
+    if(anchors.length>1){
+      const difs = []; for(let i=1;i<anchors.length;i++) difs.push(anchors[i].y-anchors[i-1].y);
+      difs.sort((a,b)=>a-b); rowH = difs[Math.floor(difs.length/2)];
+    }
+    const limiteCab = anchors[0].y - rowH/2;
+    const cab = itens.filter(i=> i.y < limiteCab);
+    const colunas = [];
+    PDF_COLUNAS[sec.meeting].forEach(def=>{
+      const h = cab.find(i=>{ const n = normTxt(i.str); return def.rot.some(r=> n.includes(r)); });
+      if(h) colunas.push({k:def.k, cx: h.x + h.w/2});
+    });
+    if(colunas.length===0) return;
+
+    anchors.forEach((a, i)=>{
+      const lo = i===0 ? a.y - rowH/2 : (anchors[i-1].y + a.y)/2;
+      const hi = i===anchors.length-1 ? a.y + rowH/2 : (a.y + anchors[i+1].y)/2;
+      const doRow = itens.filter(it=> it!==a && !anchors.includes(it) && it.y>=lo && it.y<hi && it.y>=limiteCab);
+      const celulas = {};
+      doRow.forEach(it=>{
+        let melhor = null, dist = Infinity;
+        colunas.forEach(c=>{ const d = Math.abs((it.x+it.w/2) - c.cx); if(d<dist){ dist=d; melhor=c; } });
+        if(!melhor) return;
+        (celulas[melhor.k] = celulas[melhor.k] || []).push(it);
+      });
+      const ent = { data: a.str.trim(), manual:{}, assign:{} };
+      Object.entries(celulas).forEach(([k, its])=>{
+        its.sort((p,q)=> p.y-q.y || p.x-q.x);
+        const ls = [];
+        its.forEach(it=>{
+          const l = ls.find(L=> Math.abs(L.y-it.y) <= TOL);
+          if(l) l.txt += ' ' + it.str.trim(); else ls.push({y:it.y, txt: it.str.trim()});
+        });
+        const textos = ls.map(l=>l.txt);
+        if(k==='tema'||k==='orador'||k==='congregacao'){
+          const v = textos.join(' ').trim();
+          ent.manual[k] = (v==='—'||v==='-') ? '' : v;
+        } else if(k==='indicadores'){
+          const sobra = [];
+          textos.forEach(t=>{
+            const m = t.match(/^(int|ext)\w*\.?\s*:?\s*(.*)$/i);
+            if(m){
+              const chave = m[1].toLowerCase()==='int' ? 'indicadorInterno' : 'indicadorExterno';
+              const nm = nomesDaCelula([m[2]]); if(nm.length) ent.assign[chave] = nm;
+            } else sobra.push(t);
+          });
+          const livres = nomesDaCelula(sobra);
+          if(livres.length && !ent.assign.indicadorInterno) ent.assign.indicadorInterno = [livres.shift()];
+          if(livres.length && !ent.assign.indicadorExterno) ent.assign.indicadorExterno = [livres.shift()];
+        } else {
+          const chave = k==='presidente' ? (sec.meeting==='fimdesemana' ? 'presidenteFDS' : 'presidenteMDS') : k;
+          const nm = nomesDaCelula(textos); if(nm.length) ent.assign[chave] = nm;
+        }
+      });
+      resultado[sec.meeting].push(ent);
+    });
+  });
+  return resultado;
+}
+
+
+/* ===================== IMPORTAR PDF PRONTO ===================== */
+function escHtml(t){ return (t||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function brotherIdLoose(nome){
+  const alvo = normTxt(nome); if(!alvo) return null;
+  const exato = state.brothers.find(b=> normTxt(b.nome)===alvo);
+  if(exato) return exato.id;
+  if(alvo.length>=4){
+    const par = state.brothers.filter(b=>{ const n = normTxt(b.nome); return n.length>=4 && (n.includes(alvo)||alvo.includes(n)); });
+    if(par.length===1) return par[0].id;
+  }
+  return null;
+}
+// preenche só o que está vazio; o que já tem valor diferente do PDF vira aviso (não é trocado)
+function aplicarDesignacoesImportadas(dados){
+  const rel = { preenchidos:0, conflitos:[], naoEncontrados:new Set(), semLinha:[] };
+  const dia = { fimdesemana:'Sábado', meiodesemana:'Quarta' };
+  ['fimdesemana','meiodesemana'].forEach(meeting=>{
+    (dados[meeting]||[]).forEach(item=>{
+      let chave = item.data;
+      if(!chave.includes('-')){ const [d,m] = chave.split('/'); chave = d.padStart(2,'0')+'/'+m.padStart(2,'0'); }
+      const row = (state.rows[meeting]||[]).find(r=> chave.includes('-') ? r.date===chave : (r.date.slice(8,10)+'/'+r.date.slice(5,10).slice(0,2))===chave);
+      if(!row){ rel.semLinha.push(dia[meeting]+' '+item.data); return; }
+      const quando = dia[meeting]+' '+row.date.slice(8,10)+'/'+row.date.slice(5,7);
+      if(!row.assign) row.assign = {};
+      if(!row.manual) row.manual = {};
+
+      Object.entries(item.manual||{}).forEach(([k, v])=>{
+        v = (v||'').trim(); if(!v) return;
+        const atual = (row.manual[k]||'').trim();
+        const rot = (state.manualConfig.fimdesemana[k]||{}).label || k;
+        if(!atual){ row.manual[k] = v; rel.preenchidos++; }
+        else if(normTxt(atual)!==normTxt(v)) rel.conflitos.push({quando, campo:rot, aqui:atual, pdf:v});
+      });
+
+      Object.entries(item.assign||{}).forEach(([roleKey, nomes])=>{
+        const cfg = getRoleCfg(meeting, roleKey); if(!cfg) return;
+        const ids = [];
+        (nomes||[]).forEach(n=>{
+          const id = brotherIdLoose(n);
+          if(id===null) rel.naoEncontrados.add(n); else if(!ids.includes(id)) ids.push(id);
+        });
+        if(!ids.length) return;
+        const atual = row.assign[roleKey] || [];
+        const total = cfg.count || 1;
+        if(atual.length < total){
+          const novos = ids.filter(id=>!atual.includes(id)).slice(0, total-atual.length);
+          if(novos.length){ row.assign[roleKey] = atual.concat(novos); rel.preenchidos++; }
+        } else if(!ids.every(id=>atual.includes(id))){
+          rel.conflitos.push({ quando, campo:cfg.label, aqui:atual.map(brotherNameById).join(' / '), pdf:ids.map(brotherNameById).join(' / ') });
+        }
+      });
+    });
+  });
+  return rel;
+}
+function mostrarRelatorioImportacao(rel, origem){
+  const box = document.getElementById('import-pdf-resultado');
+  if(!box) return;
+  let h = `<p><strong>${rel.preenchidos}</strong> campo(s) preenchido(s). Dados lidos do ${origem}.</p>`;
+  if(rel.conflitos.length){
+    h += `<p>Já estavam preenchidos com outro valor (mantidos como estão): <strong>${rel.conflitos.length}</strong></p><ul style="margin:4px 0 10px 18px;">`;
+    rel.conflitos.slice(0,15).forEach(c=>{ h += `<li>${escHtml(c.quando)} · ${escHtml(c.campo)}: aqui está <strong>${escHtml(c.aqui)}</strong>, no PDF está <strong>${escHtml(c.pdf)}</strong></li>`; });
+    if(rel.conflitos.length>15) h += `<li>e mais ${rel.conflitos.length-15}...</li>`;
+    h += '</ul>';
+  }
+  if(rel.naoEncontrados.size) h += `<p>Nomes do PDF que não aparecem no cadastro (confira a grafia): ${Array.from(rel.naoEncontrados).map(escHtml).join(', ')}</p>`;
+  if(rel.semLinha.length) h += `<p>Datas do PDF que não existem aqui (gere essas datas primeiro): ${rel.semLinha.map(escHtml).join(', ')}</p>`;
+  box.innerHTML = h;
+}
+async function importarPDF(event){
+  const file = event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  const box = document.getElementById('import-pdf-resultado');
+  if(typeof pdfjsLib === 'undefined'){ box.textContent = 'Não foi possível carregar o leitor de PDF. Confira a internet e recarregue a página.'; return; }
+  if(!(state.rows.fimdesemana||[]).length && !(state.rows.meiodesemana||[]).length){
+    box.textContent = 'Gere as datas antes de importar o PDF.'; return;
+  }
+  box.textContent = 'Lendo o PDF...';
+  try{
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const pdf = await pdfjsLib.getDocument({data: await file.arrayBuffer()}).promise;
+    let dados = null, origem = '';
+    const meta = await pdf.getMetadata().catch(()=>null);
+    const kw = (meta && meta.info && meta.info.Keywords) || '';
+    if(kw.startsWith('DESIGNACOES:')){
+      dados = JSON.parse(decodeURIComponent(escape(atob(kw.slice(12)))));
+      origem = 'próprio arquivo (PDF baixado deste site)';
+    } else {
+      const items = [];
+      for(let p=1; p<=pdf.numPages; p++){
+        const page = await pdf.getPage(p);
+        const vp = page.getViewport({scale:1});
+        const tc = await page.getTextContent();
+        tc.items.forEach(it=>{
+          if(!it.str || !it.str.trim()) return;
+          items.push({ str: it.str, x: it.transform[4], w: it.width, y: (p-1)*100000 + (vp.height - it.transform[5]) });
+        });
+      }
+      if(items.length < 15){
+        box.textContent = 'Este PDF não tem texto para ler (parece uma foto). Use um PDF com texto, ou um PDF baixado por este site depois desta atualização.'; return;
+      }
+      dados = extrairDeItens(items);
+      origem = 'texto do PDF';
+      if(!(dados.fimdesemana.length || dados.meiodesemana.length)){
+        box.textContent = 'Não encontrei as tabelas de designações neste PDF.'; return;
+      }
+    }
+    const rel = aplicarDesignacoesImportadas(dados);
+    renderTable('fimdesemana'); renderTable('meiodesemana');
+    if(rel.preenchidos>0) agendarSyncDesignacoes();
+    mostrarRelatorioImportacao(rel, origem);
+  }catch(err){
+    box.textContent = 'Não consegui ler este PDF. Detalhe: '+err.message;
   }
 }
 
