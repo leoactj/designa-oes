@@ -62,7 +62,16 @@
   thead th.hdr-blue{background:var(--blue-band);}
   thead th.hdr-green{background:var(--green-band);}
   thead th.hdr-cream{background:#fff;}
-  tbody td{padding:5px 4px;border:1px solid var(--line);vertical-align:middle;text-align:center;}
+  tbody td{padding:5px 4px;border:1px solid var(--line);vertical-align:middle;text-align:center;position:relative;}
+  .cell-dice{position:absolute;top:1px;right:1px;border:none;background:transparent;font-size:.7rem;padding:1px 3px;opacity:.3;cursor:pointer;line-height:1;border-radius:4px;}
+  .cell-dice-inline{border:none;background:transparent;font-size:.65rem;padding:0 2px;opacity:.3;cursor:pointer;line-height:1;flex:0 0 auto;}
+  tbody td:hover .cell-dice, .indicador-row:hover .cell-dice-inline, .cell-dice:hover, .cell-dice-inline:hover{opacity:1;}
+  .meeting-actions{max-width:1250px;margin:0 auto 18px;display:flex;gap:14px;flex-wrap:wrap;}
+  .meeting-actions .box{flex:1;min-width:260px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
+  .meeting-actions .box h3{font-family:'Fraunces',serif;font-size:.95rem;margin:0 0 10px;color:var(--navy);}
+  .meeting-actions .box .btns{display:flex;gap:8px;flex-wrap:wrap;}
+  .meeting-actions .blue-top{border-top:4px solid var(--blue-band);}
+  .meeting-actions .green-top{border-top:4px solid var(--green-band);}
   tbody tr.blue-row:nth-child(even){background:var(--blue-row);}
   tbody tr.green-row:nth-child(even){background:var(--green-row);}
   tbody td strong{font-family:'Fraunces',serif;color:var(--navy-deep);}
@@ -158,13 +167,11 @@
     <button class="tab-btn" data-tab="reunioes">Reuniões</button>
   </div>
   <div class="actions">
-    <button class="btn-gold" onclick="sortearTudo()">🎲 Designar</button>
-    <button class="btn-danger" onclick="resortearDoZero()">🔁 Sortear tudo de novo</button>
     <button class="btn-primary" onclick="baixarPDFJuntos()">⬇ Baixar PDF</button>
     <button class="btn-ghost" onclick="imprimirJuntos()">🖨 Imprimir</button>
   </div>
 </div>
-<p class="notice">💡 As designações agora são semanais: quem for escalado de Indicador ou Microfone no Sábado também fica na Quarta da mesma semana. "Designar" só preenche o que ainda está vazio (não mexe no que já foi sorteado ou editado). A justiça é calculada com base em TUDO que já foi designado — quem trabalhou menos, ou há mais tempo não trabalha, tem prioridade, e ninguém repete semanas seguidas. Oração pode repetir e coincidir com outra função no mesmo dia. Use "Sortear tudo de novo" só se quiser apagar e refazer tudo do zero.</p>
+<p class="notice">💡 As designações são semanais: quem for escalado de Indicador ou Microfone no Sábado também fica na Quarta da mesma semana. Os botões "Designar" só preenchem o que está vazio. Para refazer uma célula só, use o 🎲 pequeno dentro dela. Quem trabalhou menos, ou está há mais tempo sem trabalhar, tem prioridade, e ninguém repete em semanas seguidas. Oração pode repetir e coincidir com outra função no mesmo dia.</p>
 
 <!-- ================= IRMÃOS ================= -->
 <div class="panel active" id="panel-irmaos">
@@ -245,6 +252,24 @@
     </div>
   </div>
   <div class="config-card" id="config-funcoes"></div>
+
+  <div class="meeting-actions">
+    <div class="box blue-top">
+      <h3>Fim de Semana (Sábado)</h3>
+      <div class="btns">
+        <button class="btn-gold" onclick="sortearReuniao('fimdesemana')">🎲 Designar Sábado</button>
+        <button class="btn-danger" onclick="resortearReuniao('fimdesemana')">🔁 Refazer Sábado</button>
+        <button class="btn-ghost" onclick="sortearLeitorSabado()">📗 Refazer só o Leitor do Sábado</button>
+      </div>
+    </div>
+    <div class="box green-top">
+      <h3>Meio de Semana (Quarta)</h3>
+      <div class="btns">
+        <button class="btn-gold" onclick="sortearReuniao('meiodesemana')">🎲 Designar Quarta</button>
+        <button class="btn-danger" onclick="resortearReuniao('meiodesemana')">🔁 Refazer Quarta</button>
+      </div>
+    </div>
+  </div>
 
   <div class="poster-wrap">
     <div class="poster-inner">
@@ -754,19 +779,17 @@ function shuffle(arr){
   for(let i=a.length-1;i>0;i--){ const j = Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
   return a;
 }
+// chave da semana (segunda-feira daquela semana) para casar o sábado com a quarta da MESMA semana
+function semanaChave(dateStr){
+  const d = new Date(dateStr+'T12:00:00Z');
+  const dow = (d.getUTCDay()+6)%7; // segunda = 0
+  d.setUTCDate(d.getUTCDate()-dow);
+  return d.toISOString().slice(0,10);
+}
 function getPairedRow(meeting, rowDate){
   const other = meeting==='fimdesemana' ? 'meiodesemana' : 'fimdesemana';
-  const otherRows = state.rows[other];
-  if(!otherRows || otherRows.length===0) return null;
-  let closest = null, minDiff = Infinity;
-  const d1 = new Date(rowDate+'T12:00:00');
-  otherRows.forEach(r=>{
-    const d2 = new Date(r.date+'T12:00:00');
-    const diff = Math.abs(d1-d2)/(1000*60*60*24);
-    if(diff < minDiff){ minDiff = diff; closest = r; }
-  });
-  if(!closest || minDiff > 5) return null;
-  return closest;
+  const k = semanaChave(rowDate);
+  return (state.rows[other]||[]).find(r=> semanaChave(r.date)===k) || null;
 }
 function getPairedUsed(meeting, rowDate){
   const closest = getPairedRow(meeting, rowDate);
@@ -796,7 +819,7 @@ function computeHistorico(){
   return { usageCount, lastUsedDate };
 }
 
-function sortear(meeting, historico){
+function sortear(meeting, historico, alvo){
   const rows = state.rows[meeting];
   if(!rows || rows.length===0){ alert('Gere as datas primeiro.'); return; }
   const roleKeys = flattenRoleKeys(meeting);
@@ -810,8 +833,16 @@ function sortear(meeting, historico){
   const soundIds = new Set(state.brothers.filter(b=>b.somSistema).map(b=>b.id));
   const soundMaxPerDay = soundIds.size > 1 ? soundIds.size - 1 : soundIds.size;
 
-  rows.forEach(row=>{
+  rows.forEach((row, rowIdx)=>{
     if(!row.assign) row.assign = {};
+    const alvoNaLinha = !!alvo && (alvo.coluna || alvo.date === row.date);
+    // ao refazer uma célula, também evita quem trabalha na semana seguinte desta mesma reunião
+    let bloqueioSemanas = previousOccurrenceUsed;
+    if(alvoNaLinha){
+      bloqueioSemanas = new Set(previousOccurrenceUsed);
+      const prox = rows[rowIdx+1];
+      if(prox && prox.assign) Object.entries(prox.assign).forEach(([k, ids])=>{ if(qualKey(k)!=='oracao') (ids||[]).forEach(id=> bloqueioSemanas.add(id)); });
+    }
     const pairedUsed = getPairedUsed(meeting, row.date);
     const usedToday = new Set();
     const soundUsedToday = new Set();
@@ -826,6 +857,10 @@ function sortear(meeting, historico){
 
     roleKeys.forEach(roleKey=>{
       const cfg = getRoleCfg(meeting, roleKey);
+      if(alvo){
+        if(!alvoNaLinha) return;
+        if(!(roleKey===alvo.roleKey || (cfg.derived && cfg.deriveFrom===alvo.roleKey))) return;
+      }
       if(cfg.derived){
         // só preenche Palco se ainda estiver vazio e já houver Microfone escolhido
         if(!row.assign[roleKey] || row.assign[roleKey].length===0){
@@ -854,18 +889,33 @@ function sortear(meeting, historico){
       } else if(isPairableRole){
         // modo "emparelhar": aqui queremos JUSTAMENTE reaproveitar quem já está na reunião pareada
         // (não excluímos por pairedUsed); só evitamos repetir a semana passada desta mesma reunião
-        pool = state.brothers.filter(b => base(b) && !previousOccurrenceUsed.has(b.id));
+        pool = state.brothers.filter(b => base(b) && !bloqueioSemanas.has(b.id));
         if(pool.length===0) pool = state.brothers.filter(base);
       } else {
         // 1ª tentativa (ideal): não repete a semana passada nesta reunião, e não sobrepõe com a outra reunião
-        pool = state.brothers.filter(b => base(b) && !previousOccurrenceUsed.has(b.id) && !pairedUsed.has(b.id));
+        pool = state.brothers.filter(b => base(b) && !bloqueioSemanas.has(b.id) && !pairedUsed.has(b.id));
         // 2ª tentativa: permite sobrepor com a outra reunião da semana, mas continua evitando repetir a semana passada
         if(pool.length===0){
-          pool = state.brothers.filter(b => base(b) && !previousOccurrenceUsed.has(b.id));
+          pool = state.brothers.filter(b => base(b) && !bloqueioSemanas.has(b.id));
         }
         // 3ª tentativa (último recurso): permite repetir mesmo a semana passada
         if(pool.length===0){
           pool = state.brothers.filter(base);
+        }
+      }
+
+      // cargos iguais nas duas reuniões (ex: Leitor): a mesma pessoa não repete na mesma semana
+      if(!isOracao && !isPairableRole){
+        const parRow = getPairedRow(meeting, row.date);
+        const mesmos = (parRow && parRow.assign && parRow.assign[roleKey]) || [];
+        if(mesmos.length) pool = pool.filter(b => !mesmos.includes(b.id));
+      }
+      // ao refazer uma célula, tenta trocar por alguém diferente de quem estava
+      if(alvoNaLinha && roleKey===alvo.roleKey){
+        const excl = alvo.coluna ? ((alvo.excluirPorData||{})[row.date]||[]) : (alvo.excluir||[]);
+        if(excl.length){
+          const outros = pool.filter(b => !excl.includes(b.id));
+          if(outros.length) pool = outros;
         }
       }
 
@@ -925,6 +975,60 @@ function sortear(meeting, historico){
   });
   renderTable(meeting);
 }
+function sortearReuniao(meeting){
+  const historico = computeHistorico();
+  sortear(meeting, historico);
+  agendarSyncDesignacoes();
+}
+function resortearReuniao(meeting){
+  const nome = meeting==='fimdesemana' ? 'Fim de Semana (Sábado)' : 'Meio de Semana (Quarta)';
+  if(!confirm('Isso apaga as designações do '+nome+' e sorteia de novo. A outra reunião não muda. Continuar?')) return;
+  (state.rows[meeting]||[]).forEach(row=> row.assign = {});
+  const historico = computeHistorico();
+  sortear(meeting, historico);
+  agendarSyncDesignacoes();
+}
+// refaz só uma célula (um cargo em uma data), sem mexer nas outras
+function sortearCelula(meeting, rowIdx, roleKey){
+  const row = (state.rows[meeting]||[])[rowIdx]; if(!row) return;
+  if(!row.assign) row.assign = {};
+  const cfg = getRoleCfg(meeting, roleKey);
+  if(cfg && cfg.derived){
+    const src = row.assign[cfg.deriveFrom] || [];
+    const atual = (row.assign[roleKey]||[])[0];
+    const outros = src.filter(id=>id!==atual);
+    const pool = outros.length ? outros : src;
+    if(pool.length) row.assign[roleKey] = [ pool[Math.floor(Math.random()*pool.length)] ];
+    renderTable(meeting); agendarSyncDesignacoes(); return;
+  }
+  const anteriores = (row.assign[roleKey]||[]).slice();
+  delete row.assign[roleKey];
+  Object.keys(row.assign).forEach(k=>{ const c = getRoleCfg(meeting,k); if(c && c.derived && c.deriveFrom===roleKey) delete row.assign[k]; });
+  const historico = computeHistorico();
+  sortear(meeting, historico, { date: row.date, roleKey, excluir: anteriores });
+  const novos = row.assign[roleKey] || [];
+  if(!novos.length) alert('Não há irmão disponível para este cargo neste dia. Confira quem está marcado como apto ou escolha na lista.');
+  else if(anteriores.length && novos.every(id=>anteriores.includes(id))) alert('Só esta pessoa está disponível para este cargo neste dia.');
+  agendarSyncDesignacoes();
+}
+// refaz só uma coluna (um cargo, todas as semanas) de uma reunião; o resto não muda
+function sortearColuna(meeting, roleKey, nomeColuna){
+  const rows = state.rows[meeting] || [];
+  if(rows.length===0){ alert('Gere as datas primeiro.'); return; }
+  if(!confirm('Isso refaz só a coluna '+nomeColuna+' (todas as semanas). O resto não muda. Continuar?')) return;
+  const excluirPorData = {};
+  rows.forEach(row=>{
+    if(!row.assign) row.assign = {};
+    excluirPorData[row.date] = (row.assign[roleKey]||[]).slice();
+    delete row.assign[roleKey];
+  });
+  const historico = computeHistorico();
+  sortear(meeting, historico, { coluna:true, roleKey, excluirPorData });
+  const vazios = rows.filter(r=> !(r.assign[roleKey]||[]).length).length;
+  if(vazios) alert(vazios+' semana(s) ficaram sem ninguém, porque não sobrou irmão apto livre. Escolha na lista ou marque mais irmãos como aptos.');
+  agendarSyncDesignacoes();
+}
+function sortearLeitorSabado(){ sortearColuna('fimdesemana','leitor','Leitor do Sábado'); }
 function sortearTudo(){
   // preenche só o que ainda está vazio, preservando qualquer designação já feita (manual ou de um sorteio anterior)
   const historico = computeHistorico();
@@ -1004,7 +1108,7 @@ function renderTable(meeting){
             <select class="role-select" title="${currentName}" onchange="editarSlot('${meeting}',${rIdx},'${m.key}',0,this.value); this.title=this.options[this.selectedIndex].text;">
               <option value="">—</option>` +
               eligible.map(b=>`<option value="${b.id}" ${parseInt(currentId)===b.id?'selected':''}>${b.nome}</option>`).join('') +
-            `</select></div>`;
+            `</select><button class="cell-dice-inline" title="Sortear só esta célula" onclick="sortearCelula('${meeting}',${rIdx},'${m.key}')">🎲</button></div>`;
         }).join('');
         html += `<td class="${shortAny?'warn-cell':''}">${inner}</td>`;
       } else {
@@ -1023,7 +1127,7 @@ function renderTable(meeting){
               sourcePicks.map(id=>{
                 const b = state.brothers.find(x=>x.id===id);
                 return b ? `<option value="${b.id}" ${parseInt(currentId)===b.id?'selected':''}>${b.nome}</option>` : '';
-              }).join('') + `</select>`;
+              }).join('') + `</select>` + `<button class="cell-dice" title="Sortear só esta célula" onclick="sortearCelula('${meeting}',${rIdx},'${c.key}')">🎲</button>`;
           }
           html += `</td>`;
         } else {
@@ -1039,6 +1143,7 @@ function renderTable(meeting){
               `</select>`;
           }
           if(short) html += `<div class="warn-tag">faltam irmãos aptos</div>`;
+          html += `<button class="cell-dice" title="Sortear só esta célula" onclick="sortearCelula('${meeting}',${rIdx},'${c.key}')">🎲</button>`;
           html += `</td>`;
         }
       }
